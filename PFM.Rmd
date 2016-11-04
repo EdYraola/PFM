@@ -1,0 +1,737 @@
+---
+title: <center> ANALISIS DEL TURISMO EN ESPAÑA </center>
+author: "Eduardo Yraola"
+output:
+    html_document:
+    fig_height: 6
+    fig_width: 9
+---
+
+<br></br>
+
+#### **Introducción:**
+
+La creciente subida del turismo en España es motivo de inteŕes económico en diversos sectores privados. En este sentido la hostelería es quizás uno de los más beneficiados sobre todo en los meses de verano. Por ello, la principal motivación de este trabajo es desarrollar un análisis específico de la tendencia turística en este sector. 
+<br></br>
+
+
+Para ello se han usado datos de movimientos turísticos en fronteras proporcionados por Frontur y el INE. (Nota: Los datos contiene un histórico desde 2013 a 2015)
+<br></br>
+
+Frontur: http://estadisticas.tourspain.es/es-es/estadisticas/frontur/microdatos/paginas/default.aspx
+<br></br>
+
+INE: http://www.ine.es/prodyser/micro_frontur.htm
+
+<br></br>
+
+Los campos de interés contenidos en los datos han sido: el número de viajeros, la fecha, la nacionalidad, 
+el destino (comunidad autónoma y provincia), los motivos de viaje, el tipo de alojamiento, y si se ha contratado paquete turístico.
+
+<br></br>
+
+En primer lugar, queremos ver cuales son las nacionalidades que potencialmente representan un target comercial para el sector hotelero Español, para a continuación determinar donde y cuando será un buen momento para aplicar una campaña de marketing orientada a estas.
+<br></br>
+
+
+```{r librerias, message=FALSE, warning=FALSE, include=FALSE}
+#Limpiamos el workspace
+rm(list=ls())
+
+# ########################################################################
+# #                        LIBRERIAS
+# ########################################################################
+
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load("dplyr","ggplot2", "reshape2","rgdal","RColorBrewer","ggmap",
+               "scales","party","class","gdata","tseries")
+
+
+#Sustituir el "path" por el directotio de trabajo en donde se tengan los datos.
+setwd("~/Escritorio/Master/Proyecto/Frontur/PFM")
+
+```
+
+<br></br>
+
+#### **Top 5 de nacionalidades con mayor volumen de turistas en España**
+
+Como punto de partida a continuación se presenta el ranking de las cinco primeras nacionalidades, alojadas en hotel, que más visitaron nuestro pais en 2015.
+
+```{r - Ranking de Paises por volumen de turistas, fig.width=7, fig.height=3, echo=FALSE, message=FALSE, warning=FALSE}
+
+Ft15 <- read.csv("Ft15.csv",colClasses="character")
+Ft<-Ft15
+
+tmp <- Ft[!grepl("^0",Ft$Pais),] #Quitamos turistas españoles
+tmp <- tmp[!grepl("^00$",tmp$CC_AA),] #Nos quitamos los viajeros con destino distinto de España.
+tmp <-tmp[grepl("^1$",tmp$ALOJAMIENTOS),] #Viajeros alojados en hoteles
+#Basta con quitaros los CC_AA==00 ya que esto implica que Provincia==00. Pg. 5 pdf. 
+#Si nos fijamos tmp no cambia con respecto al resultado anterior. 
+#Por tanto los turistas con destino distinto de España son los turistas españoles.
+
+tmp$MES<-as.numeric(tmp$MES)
+tmp$VIAJEROS<-as.numeric(tmp$VIAJEROS)
+
+
+tmp<- tmp %>% group_by(Pais) %>% summarise(total = sum(VIAJEROS))
+tmp<-tmp[order(tmp$total,decreasing=T),]
+
+paises<-c("110", "125" ,"123" ,"126" ,"115")
+
+tmp<-tmp[grep(paste(paises, collapse='|'), tmp$Pais, ignore.case=TRUE),]
+tmp$Pais <- gsub("110", "Francia", tmp$Pais)
+tmp$Pais <- gsub("125", "Reino Unido", tmp$Pais)
+tmp$Pais <- gsub("123", "Portugal", tmp$Pais)
+tmp$Pais <- gsub("126", "Alemania", tmp$Pais)
+tmp$Pais <- gsub("115", "Italia", tmp$Pais)
+
+tmp<-tmp[order(tmp$total,decreasing = T),] 
+tmp<-as.data.frame(tmp) 
+tmp$total<-tmp$total/1e+6
+colnames(tmp)[colnames(tmp)=="total"] <- "millones"
+
+
+ggplot(tmp , aes(x = Pais, y = millones )) +  stat_summary(fun.y=mean,position=position_dodge(),geom="bar") + coord_flip() + 
+  theme(axis.text = element_text(size=12)) + 
+  theme(title = element_text(size=16)) + geom_text(aes(label=round(millones,1)), vjust=1.6, color="white", position = position_nudge(x = +0.5, y = -0.5), size=7)
+ 
+ 
+            
+```
+
+<br></br>
+
+Viendo la tabla vemos que las nacionalidades que encabezan la lista son Reino Unido y Alemania.
+
+<br></br>
+
+#### **Correlación entre alojados en hotel y que han contratado paquete turístico**
+
+<br></br>
+A continuación queremos ver la cantidad de turistas alojados en hotel, con y sin contratación de paquete turístico, por nacionalidad. 
+
+
+<br></br>
+
+```{r Ranking paises con/sin paquete, fig.width=8, echo=FALSE, message=FALSE, warning=FALSE}
+
+#Filtramos por el top 5 de paises
+tmp<-Ft[grep(paste(paises, collapse='|'), Ft$Pais, ignore.case=TRUE),]
+tmp$Pais <- gsub("110", "Francia", tmp$Pais)
+tmp$Pais <- gsub("125", "Reino Unido", tmp$Pais)
+tmp$Pais <- gsub("123", "Portugal", tmp$Pais)
+tmp$Pais <- gsub("126", "Alemania", tmp$Pais)
+tmp$Pais <- gsub("115", "Italia", tmp$Pais)
+
+tmp$PAQUETE <- gsub("1", "Sin paquete", tmp$PAQUETE)
+tmp$PAQUETE <- gsub("2", "Con paquete", tmp$PAQUETE)
+
+tmp2<-tmp[grepl("^1$",tmp$ALOJAMIENTOS),] #Viajeros alojados en hoteles
+tmp2<-tmp2[grepl("31",tmp2$MOTIVOS),] #Turistas 
+
+tmp2$Pais<-as.factor(tmp2$Pais)
+tmp2$PAQUETE<-as.factor(tmp2$PAQUETE)
+tmp2$MES<-as.numeric(tmp2$MES)
+tmp2$VIAJEROS<-as.numeric(tmp2$VIAJEROS)
+
+tmp2<- tmp2 %>% group_by(Pais,PAQUETE) %>% summarise(total = sum(VIAJEROS))
+tmp2$total<-tmp2$total/1e+6
+colnames(tmp2)[colnames(tmp2)=="total"] <- "millones"
+
+ggplot(tmp2 , aes(x = Pais, y = millones, fill = PAQUETE)) + 
+  stat_summary(fun.y=mean,position=position_dodge(),geom="bar") +
+  ggtitle("Turistas alojados en hotel") + 
+  theme(axis.text = element_text(size=14)) + 
+  theme(axis.title = element_text(size=16)) +
+  theme(legend.text = element_text(size=14)) +
+  theme(title = element_text(size=18)) +  scale_fill_brewer(palette="Paired")
+
+
+
+
+```
+
+<br></br>
+
+
+Se observa claramente que los Ingleses y los Alemanes, además de ser los que mas visitaron España en 2015, son mas propensos a contratar paquete de viajes. Por tanto estas dos nacionalidades represetarán el "target" comercial de este trabajo.
+
+<br></br>
+
+
+Ya que los meses de verano son de mayor interés de cara al turismo nuestra siguiente cuestión es asegurarnos de que la tendencia observada en el anterior gráfico también se da en esta época. Por tanto si filtramos solo para el mes de Agosto tenemos:
+
+<br></br>
+
+```{r Ranking paises con/sin paquete Agosto, fig.width=8, echo=FALSE, message=FALSE, warning=FALSE}
+
+tmp3<-tmp[tmp$MES=="8",] # Filtramos por el mes de Agosto
+tmp3<-tmp3[grepl("^1$",tmp3$ALOJAMIENTOS),] #Viajeros alojados en hoteles
+tmp3<-tmp3[grepl("31",tmp3$MOTIVOS),] #Turistas 
+
+tmp3$Pais<-as.factor(tmp3$Pais)
+tmp3$PAQUETE<-as.factor(tmp3$PAQUETE)
+tmp3$MES<-as.numeric(tmp3$MES)
+tmp3$VIAJEROS<-as.numeric(tmp3$VIAJEROS)
+
+tmp3<- tmp3 %>% group_by(Pais,PAQUETE) %>% summarise(total = sum(VIAJEROS))
+tmp3$total<-tmp3$total/1e+6
+colnames(tmp3)[colnames(tmp3)=="total"] <- "millones"
+
+ggplot(tmp3 , aes(x = Pais, y = millones, fill = PAQUETE)) + 
+  stat_summary(fun.y=mean,position=position_dodge(),geom="bar") +
+  ggtitle("Turistas alojados en hotel en Agosto") + 
+  theme(axis.text = element_text(size=14)) + 
+  theme(axis.title = element_text(size=16)) +
+  theme(legend.text = element_text(size=14)) +
+  theme(title = element_text(size=18)) +  scale_fill_brewer(palette="Paired")
+
+
+```
+
+
+<br></br>
+
+Comparando las dos gráficas anteriores vemos que tienen la misma forma, pero con distinta escala en el total de viajeros. Lo cual tiene sentido ya que nos quedamos con muchos menos viajeros al filtrar por un mes en concreto.
+
+<br></br>
+
+Una vez determinadas las dos nacionalidades de interés visualizamos el histórico mensual de la cantidad de turistas alojados en hotel, con y sin contratación de paquete turístico.
+
+
+<br></br>
+
+```{r Ranking de meses con mayor número de visitas, fig.width=9, echo=FALSE, message=FALSE, warning=FALSE}
+
+tmp3<-tmp[tmp$Pais %in% c("Reino Unido","Alemania"),] #Ingleses y Alemanes 
+tmp3<-tmp3[grepl("31",tmp3$MOTIVOS),] #Turistas 
+tmp3<-tmp3[grepl("^1$",tmp3$ALOJAMIENTOS),] #Alojados en hotel
+
+tmp3$Pais<-as.factor(tmp3$Pais)
+tmp3$PAQUETE<-as.factor(tmp3$PAQUETE)
+tmp3$MES<-as.numeric(tmp3$MES)
+tmp3$MES<-as.factor(tmp3$MES)
+tmp3$VIAJEROS<-as.numeric(tmp3$VIAJEROS)
+
+tmp3<- tmp3 %>% group_by(Pais,MES, PAQUETE) %>% summarise(total = sum(VIAJEROS))
+tmp3$total<-tmp3$total/1e+6
+colnames(tmp3)[colnames(tmp3)=="total"] <- "millones"
+
+ggplot(tmp3 , aes(x = MES, y = millones, fill = PAQUETE)) + 
+  stat_summary(fun.y=mean,position=position_dodge(),geom="bar") +
+  ggtitle("Turistas alojados en hotel en 2015") + 
+  theme(axis.text = element_text(size=14)) + 
+  theme(axis.title = element_text(size=16)) +
+  theme(legend.text = element_text(size=14)) +
+  theme(title = element_text(size=18)) +  
+  facet_wrap(~ Pais) +  scale_fill_brewer(palette="Paired")
+
+```
+
+<br></br>
+
+Como era de esperar las distribuciones crecen en los meses de verano y bajan en los meses de invierno. Aún así ambas nacionalidades son propensas a la contratación del paquete de viajes para practicamente todos los meses el año.
+
+<br></br>
+
+#### **Corrección a la muestra donada**
+
+<br></br>
+
+Antes de pasar a ver la distribución geográfica por provincias debemos hacer una corrección en los datos del número de viajeros. Esto se debe a que cuando la muestra recogida es baja, se completa con muestra donada de periodos anteriores al mes de referencia.
+<br></br>
+En nuestros datos, la muestra donada son los viajeros con el campo Provincias igual a 00, y el campo CC_AA (Comunidad Autónoma) distinto de 00.
+<br></br>
+
+Vemos que volumen de muestra donada hay para el caso de viajeros Ingleses alojados en hotel para un mes concreto (Agosto). 
+
+<br></br>
+
+```{r Corrección a la muestra donada , echo=FALSE, message=FALSE, warning=FALSE}
+
+# Seleccionamos un mes concreto para ver la distribución geográfica de viajeros
+#(Para cambiar el mes se tiene que modificar el nº de mes en los sripts de las filas 62, 105(opcional) y 143)
+tmp<-Ft[Ft$MES=="8",] 
+
+# Aplicamos los filtros que queramos (Jugar con esto)
+tmp<-tmp[grepl("^1$",tmp$ALOJAMIENTOS),] #Viajeros alojados en hoteles
+tmp<-tmp[grepl("31",tmp$MOTIVOS),] #Turistas 
+tmp<-tmp[grepl("125",tmp$Pais),] #Ingleses
+
+# Muestra donada a las Provincias
+a<-table(tmp$Provincia=="00",tmp$CC_AA!="00")
+
+cat("El volumen de muestra sin donación es", a[1])
+
+cat("El volumen de muestra donada es", a[2])
+
+```
+
+<br></br>
+
+
+Ahora queremos ver la cantidad de muestra donada por Provincia. Para ello vemos cuantos viajeros por Comunidad Autónoma hay con Provincia =="00".
+<br></br>
+
+```{r Cantidad de muestra donada, echo=FALSE, message=FALSE, warning=FALSE}
+
+tmp4<-tmp
+tmp4$CC_AA <- gsub("01", "Andalucía", tmp4$CC_AA)
+tmp4$CC_AA <- gsub("02", "Aragón", tmp4$CC_AA)
+tmp4$CC_AA <- gsub("03", "Asturias", tmp4$CC_AA)
+tmp4$CC_AA <- gsub("04", "Baleares", tmp4$CC_AA)
+tmp4$CC_AA <- gsub("05", "Canarias", tmp4$CC_AA)
+tmp4$CC_AA <- gsub("06", "Cantabria", tmp4$CC_AA)
+tmp4$CC_AA <- gsub("07", "Castilla y León", tmp4$CC_AA)
+tmp4$CC_AA <- gsub("08", "Castilla La Mancha", tmp4$CC_AA)
+tmp4$CC_AA <- gsub("09", "Cataluña", tmp4$CC_AA)
+tmp4$CC_AA <- gsub("10", "Comunidad Valenciana", tmp4$CC_AA)
+tmp4$CC_AA <- gsub("11", "Extremadura", tmp4$CC_AA)
+tmp4$CC_AA <- gsub("12", "Galicia", tmp4$CC_AA)
+tmp4$CC_AA <- gsub("13", "Madrid", tmp4$CC_AA)
+tmp4$CC_AA <- gsub("14", "Murcia", tmp4$CC_AA)
+tmp4$CC_AA <- gsub("15", "Navarra", tmp4$CC_AA)
+tmp4$CC_AA <- gsub("16", "País Vasco", tmp4$CC_AA)
+tmp4$CC_AA <- gsub("17", "La Rioja", tmp4$CC_AA)
+
+b<-table(tmp4$Provincia=="00",tmp4$CC_AA)
+b<-as.data.frame(b)
+b<-b[b$Var1==TRUE,]
+
+colnames(b)[colnames(b)=="Var2"] <- "Provincia"
+colnames(b)[colnames(b)=="Freq"] <- "Donación"
+b[,2:3]
+
+tmp$CC_AA<-as.numeric(tmp$CC_AA)
+tmp$Provincia<-as.numeric(tmp$Provincia)
+tmp$VIAJEROS<-as.numeric(tmp$VIAJEROS)
+
+
+```
+
+<br></br>
+Por tanto, la cantidad total de muestra donada a toda una Comunidad Autónoma tiene que repartirse proporcionalmente entre todas las provincias de esa Comunidad Autónoma. 
+
+<br></br>
+Para ello tenemos que multiplicar el nº de viajeros de cada Provincia por el Factor = ((Muestra donada/Muestra recogida) + 1)).
+<br></br>
+Donde:
+<br></br>
+Muestra donada = Suma de viajeros con Provincia=00
+br></br>
+Muestra recogida = Suma de viajeros con Provincia!=00
+
+<br></br>
+
+A continuación se muestra la función usada para aplicar el factor corrector por Provincia:
+
+<br></br>
+```{r Función de corrección, message=FALSE, warning=FALSE}
+
+# Creamos una función que genera la lista de factores de cada CC_AA 
+# que posteriormente tendremos que multiplicar por cada Provincia.
+
+foo <- function(tmp){
+  u=0
+  for (i in 1:18){ 
+    a<-sum(as.numeric(tmp[tmp$CC_AA==i,][tmp[tmp$CC_AA==i,]$Provincia==0,]$VIAJEROS)) #Suma de viajeros con Provincia=00 (muestra donada)
+    b<-sum(as.numeric(tmp[tmp$CC_AA==i,][tmp[tmp$CC_AA==i,]$Provincia!=0,]$VIAJEROS)) #Suma de viajeros con Provincia!=00 (muestra recogida)
+    u[i]=((a/b)+1); #Vector de factores
+  }
+  return(u) 
+}
+
+df <- data.frame(foo(tmp)) #Tabla de factores
+df<-cbind(1:18,df) # Añadimos una columna que corresponde a los valores de las CC_AA.
+colnames(df)[colnames(df)=="1:18"] <- "CC_AA"
+colnames(df)[colnames(df)=="foo.tmp."] <- "Factor"
+
+tmp<-merge(tmp,df, by = "CC_AA") #Unimos las dos tablas por la CC_AA
+tmp$VIAJEROS<-tmp$VIAJEROS*tmp$Factor #Multiplicamos el nº de Viajeros por el factor de correción obtenido.
+tmp$Factor<- NULL #Ya no necesitamos la columna Factor
+
+#Creamos una tabla que nos de el nº total de viajeros por Provincia en Agosto (ya que antes nos quedamos solo con este mes).
+tmp<-dcast(tmp, Provincia ~ MES , value.var = "VIAJEROS", fun.aggregate = sum)  
+tmp$Provincia<-as.numeric(tmp$Provincia) 
+
+```
+
+
+<br></br>
+
+Una vez hecha la corrección podemos visualizar correctamente la cantidad de turistas Ingleses alojados en hotel por Provincia. El valor numérico que aparece dentro de cada Provincia representa el porcentaje de esta cantidad.
+
+<br></br>
+
+#### **Distribución de turistas Ingleses en Agosto**
+<br></br>
+```{r Visualicación de España , echo=FALSE, message=FALSE, warning=FALSE}
+
+
+#Mapa Peninsula y Baleares. Google
+esp <- geocode('Huete, España', source = "google")
+map.esp<- get_map(location = as.numeric(esp),
+                  color = "color",
+                  maptype = "roadmap",
+                  scale = 2,
+                  zoom = 6)
+
+#Mapa Canarias. Google
+can <- geocode('Canarias', source = "google")
+map.can<- get_map(location = as.numeric(can),
+                  color = "color",
+                  maptype = "roadmap",
+                  scale = 2,
+                  zoom = 8)
+
+# Shapefiles de provincias españolas: http://www.arcgis.com/home/item.html?id=83d81d9336c745fd839465beab885ab7
+
+#Leemos el Shapefile de provincias
+provincias <- readOGR(dsn = "Provincias", "Provincias_ETRS89_30N")
+
+provincias$Cod_CCAA<-as.numeric(provincias$Cod_CCAA)
+
+#GGPLOT España
+points <- spTransform(provincias , CRS("+proj=longlat +datum=WGS84"))
+points <- fortify(points) #Esto convierte el shapefile con todos sus atributos en un dataframe con el que ggmap puede operar.
+points$id<-as.numeric(points$id)
+points$id<-points$id+1 #Hay que sumarle 1 porque si no coge el 0, que no es ninguna provincia.
+
+points2 <- left_join(points, tmp, by = c("id" = "Provincia")) 
+
+
+
+centers<-points2[,c(1,2,6,8)] #tabla con las longitudes, latitudes, ids, y nº de viajeros de cada provincia
+
+#función que genera los valores medios de la anterior tabla
+#así obtenemos el centro de cada provincia
+foo <- function(centers){
+  u=0
+  for (i in 1:52){ 
+    a<-colMeans(centers[centers$id==i,]) 
+    u[i]<-merge(a,a[i+1])
+  }
+  return(u) 
+}
+
+#Creamos la nueva tabla y la reordenamos. 
+#Seguramente haya una manera mejor pero daba fallos incluso anidando las siguientes expresiones.
+centers <- foo(centers)
+centers<-data.frame(centers)
+centers<-t(centers)
+centers<-data.frame(centers)
+
+colnames(centers)[colnames(centers)=="X1"] <- "long"
+colnames(centers)[colnames(centers)=="X2"] <- "lat"
+colnames(centers)[colnames(centers)=="X3"] <- "id"
+colnames(centers)[colnames(centers)=="X4"] <- "8"
+rownames(centers) <- c()
+centers$`8`<-round(centers$`8`,1) #Redondeamos los valores del nº de viajeros
+centers$`8`<-round((centers$`8`*100)/sum(centers$`8`, na.rm = T),2) #Calculamos el porcentage de cada provincia
+
+# Spectral plot + valor del nº de viajeros
+points2$`8`<-points2$`8`/1e+6
+colnames(points2)[colnames(points2)=="8"] <- "millones"
+
+ggmap(map.esp, extent = "device") + geom_polygon(aes(x=long,y=lat, group=group, fill=millones), data=points2, color='black') +
+  scale_fill_distiller(breaks = pretty_breaks(n = 7), palette='Spectral') +
+  geom_text( data=centers, hjust=0.5, vjust=-0.5, aes(x=long, y=lat, label=`8`), colour="black", size=4) +
+  ggtitle("Distribución de turistas Ingleses en Agosto")+ 
+  theme(title = element_text(size=14))
+
+ggmap(map.can, extent = "device") + geom_polygon(aes(x=long,y=lat, group=group, fill=millones), data=points2, color='black') +
+  scale_fill_distiller(breaks = pretty_breaks(n = 7), palette='Spectral') +
+  geom_text( data=centers, hjust=0.5, vjust=-0.5, aes(x=long, y=lat, label=`8`), colour="black", size=4)
+
+
+```
+
+<br></br>
+
+El dato mas llamativo es que el 38% de los Ingleses van a Baleares en Agosto, seguido de Canarias (11.46%) y Barcelona (8,76%).
+
+<br></br>
+
+
+#### **Distribución de turistas Alemanes en Agosto**
+
+A continuación realizamos la misma corrección para los turistas Alemanes alojados en hotel en Agosto y visualizamos:
+
+<br></br>
+
+```{r Corrección muestra donada para Alemanes, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Seleccionamos un mes concreto para ver la distribución geográfica de viajeros
+#(Para cambiar el mes se tiene que modificar el nº de mes en los sripts de las filas 62, 105(opcional) y 143)
+tmp<-Ft[Ft$MES=="8",] 
+
+# Aplicamos los filtros que queramos (Jugar con esto)
+tmp<-tmp[grepl("^1$",tmp$ALOJAMIENTOS),] #Viajeros alojados en hoteles
+tmp<-tmp[grepl("31",tmp$MOTIVOS),] #Turistas 
+tmp<-tmp[grepl("126",tmp$Pais),] #Alemanes
+
+
+```
+
+
+```{r Cantidad muestra donada, echo=FALSE, message=FALSE, warning=FALSE}
+
+
+tmp$CC_AA<-as.numeric(tmp$CC_AA)
+tmp$Provincia<-as.numeric(tmp$Provincia)
+tmp$VIAJEROS<-as.numeric(tmp$VIAJEROS)
+
+
+```
+
+
+```{r Función corrección, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Creamos una función que genera la lista de factores de cada CC_AA 
+# que posteriormente tendremos que multiplicar por cada Provincia.
+
+foo <- function(tmp){
+  u=0
+  for (i in 1:18){ 
+    a<-sum(as.numeric(tmp[tmp$CC_AA==i,][tmp[tmp$CC_AA==i,]$Provincia==0,]$VIAJEROS)) #Suma de viajeros con Provincia=00 (muestra donada)
+    b<-sum(as.numeric(tmp[tmp$CC_AA==i,][tmp[tmp$CC_AA==i,]$Provincia!=0,]$VIAJEROS)) #Suma de viajeros con Provincia!=00 (muestra recogida)
+    u[i]=((a/b)+1); #Vector de factores
+  }
+  return(u) 
+}
+
+df <- data.frame(foo(tmp)) #Tabla de factores
+df<-cbind(1:18,df) # Añadimos una columna que corresponde a los valores de las CC_AA.
+colnames(df)[colnames(df)=="1:18"] <- "CC_AA"
+colnames(df)[colnames(df)=="foo.tmp."] <- "Factor"
+
+tmp<-merge(tmp,df, by = "CC_AA") #Unimos las dos tablas por la CC_AA
+tmp$VIAJEROS<-tmp$VIAJEROS*tmp$Factor #Multiplicamos el nº de Viajeros por el factor de correción obtenido.
+tmp$Factor<- NULL #Ya no necesitamos la columna Factor
+
+#Creamos una tabla que nos de el nº total de viajeros por Provincia en Agosto (ya que antes nos quedamos solo con este mes).
+tmp<-dcast(tmp, Provincia ~ MES , value.var = "VIAJEROS", fun.aggregate = sum)  
+tmp$Provincia<-as.numeric(tmp$Provincia) #Para que no de fallos en el merge con provincia de mas adelante
+```
+
+
+<br></br>
+
+```{r Visualicación , echo=FALSE, message=FALSE, warning=FALSE}
+
+# Left join (con merge a veces se ordenan mal los datos y la visualización da fallos)
+# points2 <- merge(points, tmp, by.x='id', by.y='Provincia', all.x=T)
+points2 <- left_join(points, tmp, by = c("id" = "Provincia")) 
+
+centers<-points2[,c(1,2,6,8)] #tabla con las longitudes, latitudes, ids, y nº de viajeros de cada provincia
+
+#función que genera los valores medios de la anterior tabla
+#así obtenemos el centro de cada provincia
+foo <- function(centers){
+  u=0
+  for (i in 1:52){ 
+    a<-colMeans(centers[centers$id==i,]) 
+    u[i]<-merge(a,a[i+1])
+  }
+  return(u) 
+}
+
+#Creamos la nueva tabla y la reordenamos. 
+#Seguramente haya una manera mejor pero daba fallos incluso anidando las siguientes expresiones.
+centers <- foo(centers)
+centers<-data.frame(centers)
+centers<-t(centers)
+centers<-data.frame(centers)
+
+colnames(centers)[colnames(centers)=="X1"] <- "long"
+colnames(centers)[colnames(centers)=="X2"] <- "lat"
+colnames(centers)[colnames(centers)=="X3"] <- "id"
+colnames(centers)[colnames(centers)=="X4"] <- "8"
+rownames(centers) <- c()
+centers$`8`<-round(centers$`8`,1) #Redondeamos los valores del nº de viajeros
+centers$`8`<-round((centers$`8`*100)/sum(centers$`8`, na.rm = T),2) #Calculamos el porcentage de cada provincia
+
+# Spectral plot + valor del nº de viajeros
+points2$`8`<-points2$`8`/1e+6
+colnames(points2)[colnames(points2)=="8"] <- "millones"
+
+ggmap(map.esp, extent = "device") + geom_polygon(aes(x=long,y=lat, group=group, fill=millones), data=points2, color='black') +
+  scale_fill_distiller(breaks = pretty_breaks(n = 6), palette='Spectral') +
+  geom_text( data=centers, hjust=0.5, vjust=-0.5, aes(x=long, y=lat, label=`8`), colour="black", size=4) +
+  ggtitle("Distribución de turistas Alemanes en Agosto")+ 
+  theme(title = element_text(size=14))
+
+ggmap(map.can, extent = "device") + geom_polygon(aes(x=long,y=lat, group=group, fill=millones), data=points2, color='black') +
+  scale_fill_distiller(breaks = pretty_breaks(n = 6), palette='Spectral') +
+  geom_text( data=centers, hjust=0.5, vjust=-0.5, aes(x=long, y=lat, label=`8`), colour="black", size=4)
+
+
+```
+
+<br></br>
+
+En este caso se destaca que el 54% de los Alemanes también visita Baleares en Agosto, seguido de Canarias (7.57%) y Barcelona (6,82%).
+
+
+<br></br>
+
+Gracias a esta información sabemos que localizaciones (Provincias) deberíamos elegir para desarrollar un paquete de viajes orientado a estas nacionalidades.
+
+<br></br>
+
+#### **Predicción del turismo **
+
+Como punto último de este estudio queremos predecir la evolución del número de visitas de estas dos nacionalidades. Para ello se ha usado un modelo de serie temporal. 
+
+<br></br>
+
+Para los Ingleses con paquete de viajes.
+
+<br></br>
+```{r Modelo de serie temporal Ingleses con paquete, echo=FALSE, message=FALSE, warning=FALSE}
+
+#Importamos los datos que previamente fueron limpiados y homogeneizados entre si.
+#Ft15 <- read.csv("Ft15.csv",colClasses="character")
+Ft14 <- read.csv("Ft14.csv",colClasses="character")
+Ft13 <- read.csv("Ft13.csv",colClasses="character")
+
+Ft13$VIAJEROS<-as.numeric(Ft13$VIAJEROS)
+Ft14$VIAJEROS<-as.numeric(Ft14$VIAJEROS)
+Ft15$VIAJEROS<-as.numeric(Ft15$VIAJEROS)
+
+Ft15$MES<-as.numeric(Ft15$MES)
+Ft14$MES<-as.numeric(Ft14$MES)
+Ft13$MES<-as.numeric(Ft13$MES)
+
+Ft15$AÑO<-"2015"
+Ft14$AÑO<-"2014"
+Ft13$AÑO<-"2013"
+
+tmp15<-Ft15 %>%  filter(ALOJAMIENTOS=="1" & MOTIVOS == "31" & Pais =="125" & PAQUETE =="2") %>% group_by(MES,AÑO) %>% summarise(total = sum(VIAJEROS))
+tmp14<-Ft14 %>%  filter(ALOJAMIENTOS=="1" & MOTIVOS == "31" & Pais =="125" & PAQUETE =="2") %>% group_by(MES,AÑO) %>% summarise(total = sum(VIAJEROS))
+tmp13<-Ft13 %>%   filter(ALOJAMIENTOS=="1" & MOTIVOS == "31"& Pais =="125" & PAQUETE =="2") %>% group_by(MES,AÑO) %>% summarise(total = sum(VIAJEROS))
+
+serie<-rbind(tmp15,tmp14,tmp13)
+serie$AÑO<-NULL
+serie$MES<-NULL
+serie$total<-serie$total/1e+6
+
+#Creamos una serie temporal
+serie<-ts(serie, frequency = 12, start = c(2013,1))
+
+fit <- arima(log(serie), c(0, 1, 1), seasonal = list(order = c(0, 1, 1), period = 12))
+pred <- predict(fit, n.ahead = 3*12) #predicción para los tres proximos años
+
+ts.plot(serie,2.718^pred$pred, xlab="año", ylab="millones", main = "Evolución del nº de Ingleses con paquete de viaje", lty = c(1,3))
+abline(reg=lm(serie~time(serie)))
+
+```
+<br></br>
+
+La predicción tiende a la estabilidad aunque el número de viajeros anual parece que se reduce.
+
+<br></br>
+Para los Ingleses sin paquete de viajes.
+
+<br></br>
+```{r Ingleses sin paquete, echo=FALSE, message=FALSE, warning=FALSE}
+
+tmp15<-Ft15 %>%  filter(ALOJAMIENTOS=="1" & MOTIVOS == "31" & Pais =="125" & PAQUETE =="1") %>% group_by(MES,AÑO) %>% summarise(total = sum(VIAJEROS))
+tmp14<-Ft14 %>%  filter(ALOJAMIENTOS=="1" & MOTIVOS == "31" & Pais =="125" & PAQUETE =="1") %>% group_by(MES,AÑO) %>% summarise(total = sum(VIAJEROS))
+tmp13<-Ft13 %>%   filter(ALOJAMIENTOS=="1" & MOTIVOS == "31"& Pais =="125" & PAQUETE =="1") %>% group_by(MES,AÑO) %>% summarise(total = sum(VIAJEROS))
+
+serie<-rbind(tmp15,tmp14,tmp13)
+serie$AÑO<-NULL
+serie$MES<-NULL
+serie$total<-serie$total/1e+6
+
+#Creamos una serie temporal
+serie<-ts(serie, frequency = 12, start = c(2013,1))
+
+fit <- arima(log(serie), c(0, 1, 1), seasonal = list(order = c(0, 1, 1), period = 12))
+pred <- predict(fit, n.ahead = 3*12) #predicción para los tres proximos años
+
+ts.plot(serie,2.718^pred$pred, xlab="año", ylab="millones", main ="Evolución del nº de Ingleses sin paquete de viaje", lty = c(1,3))
+abline(reg=lm(serie~time(serie)))
+
+
+```
+<br></br>
+
+La predicción tiende a disminuir conforme avanzan los años.
+
+<br></br>
+Para los Alemanes con paquete de viajes.
+
+<br></br>
+```{r Serie temporal Alemanes con paquete, echo=FALSE, message=FALSE, warning=FALSE}
+
+tmp15<-Ft15 %>%  filter(ALOJAMIENTOS=="1" & MOTIVOS == "31" & Pais =="126" & PAQUETE =="2") %>% group_by(MES,AÑO) %>% summarise(total = sum(VIAJEROS))
+tmp14<-Ft14 %>%  filter(ALOJAMIENTOS=="1" & MOTIVOS == "31" & Pais =="126" & PAQUETE =="2") %>% group_by(MES,AÑO) %>% summarise(total = sum(VIAJEROS))
+tmp13<-Ft13 %>%   filter(ALOJAMIENTOS=="1" & MOTIVOS == "31"& Pais =="126" & PAQUETE =="2") %>% group_by(MES,AÑO) %>% summarise(total = sum(VIAJEROS))
+
+serie<-rbind(tmp15,tmp14,tmp13)
+serie$AÑO<-NULL
+serie$MES<-NULL
+serie$total<-serie$total/1e+6
+
+#Creamos una serie temporal
+serie<-ts(serie, frequency = 12, start = c(2013,1))
+
+fit <- arima(log(serie), c(0, 1, 1), seasonal = list(order = c(0, 1, 1), period = 12))
+pred <- predict(fit, n.ahead = 3*12) #predicción para los tres proximos años
+
+ts.plot(serie,2.718^pred$pred, xlab="año", ylab="millones", main="Evolución del nº de Alemanes con paquete de viaje", lty = c(1,3))
+abline(reg=lm(serie~time(serie)))
+
+
+```
+<br></br>
+
+La predicción y el número de viajeros anual parece que se mantiene constante.
+<br></br>
+
+Para los Alemanes sin paquete de viajes.
+
+<br></br>
+```{r Serie temporal Alemanes sin paquete, echo=FALSE, message=FALSE, warning=FALSE}
+
+tmp15<-Ft15 %>%  filter(ALOJAMIENTOS=="1" & MOTIVOS == "31" & Pais =="126" & PAQUETE =="1") %>% group_by(MES,AÑO) %>% summarise(total = sum(VIAJEROS))
+tmp14<-Ft14 %>%  filter(ALOJAMIENTOS=="1" & MOTIVOS == "31" & Pais =="126" & PAQUETE =="1") %>% group_by(MES,AÑO) %>% summarise(total = sum(VIAJEROS))
+tmp13<-Ft13 %>%   filter(ALOJAMIENTOS=="1" & MOTIVOS == "31"& Pais =="126" & PAQUETE =="1") %>% group_by(MES,AÑO) %>% summarise(total = sum(VIAJEROS))
+
+serie<-rbind(tmp15,tmp14,tmp13)
+serie$AÑO<-NULL
+serie$MES<-NULL
+serie$total<-serie$total/1e+6
+
+#Creamos una serie temporal
+serie<-ts(serie, frequency = 12, start = c(2013,1))
+
+fit <- arima(log(serie), c(0, 1, 1), seasonal = list(order = c(0, 1, 1), period = 12))
+pred <- predict(fit, n.ahead = 3*12) #predicción para los tres proximos años
+
+ts.plot(serie,2.718^pred$pred, xlab="año", ylab="millones", main = "Evolución del nº de Alemanes sin paquete de viaje", lty = c(1,3))
+abline(reg=lm(serie~time(serie)))
+
+
+```
+
+La predicción tiende a aumentar conforme avanzan los años.
+<br></br>
+
+Con estos resultados vemos que es mas crítico fomentar del turismo Ingles con el fin de aumentar el número de visitas de este pais. 
+
+<br></br>
+#### **Conclusiones **
+
+Viendo todos los resultados y con el objetivo de aumentar el número de visitas turisticas de un cliente hotelero podemos concluir que interesaría desarrollar, por parte de los responsables de marketing, paquetes de viajes principalmente orientados a Ingleses; y enfocarlo sobre todo hacia clientes que quieran visitar las Islas Baleares.
+
+<br></br>
+No obstante aplicándolo este modelo hacia un cliente Alemán que se quiera hospedar en el mismo destino también debería generar beneficios.
+
+<br></br>
+
+<br></br>
+
